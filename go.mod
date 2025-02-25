@@ -1,4 +1,4 @@
-module github.com/go-p5/p5
+module github.com/frasmataz/p5
 
 go 1.19
 

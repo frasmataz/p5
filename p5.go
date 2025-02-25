@@ -25,7 +25,7 @@
 //
 //	func draw() {
 //	    p5.Fill(color.White)
-//	    p5.Square(10, 10, 50)
+//	    p5.Square(10, 10, 50, 50)
 //	}
 //
 // p5 actually provides two set of APIs:
@@ -40,11 +40,30 @@ var (
 
 // Run executes the user functions setup and draw.
 // Run never exits.
-func Run(setup, draw Func) {
+func Run(setup, draw Func, opts ...Option) {
 	gproc.Setup = setup
 	gproc.Draw = draw
+
+	for _, opt := range opts {
+		opt(gproc)
+	}
+
 	gproc.Run()
 }
 
 // Func is the type of functions users provide to p5.
 type Func func()
+
+// Option customizes further a p5 processor.
+type Option func(p *Proc)
+
+// WithKeyCallback binds the given function to the p5 processor's
+// key callback.
+func WithKeyCallback(cbk KeyCb) Option {
+	return func(p *Proc) {
+		p.KeyPressed = cbk.Pressed
+		p.KeyTyped = cbk.Typed
+		p.KeyReleased = cbk.Released
+	}
+}
+

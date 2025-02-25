@@ -56,8 +56,6 @@ var (
 
 	defaultTextColor = color.Black
 	defaultTextSize  = float32(12)
-
-	defaultTextFont text.Font
 )
 
 // gioWindow represents an operating system window operated by Gio.
@@ -81,9 +79,12 @@ var _ gioWindow = (*app.Window)(nil)
 // Proc runs the bound Setup function once before the event loop.
 // Proc then runs the bound Draw function once per event loop iteration.
 type Proc struct {
-	Setup Func
-	Draw  Func
-	Mouse Func
+	Setup       Func
+	Draw        Func
+	Mouse       Func
+	KeyPressed  KeyEventFunc
+	KeyTyped    KeyEventFunc
+	KeyReleased KeyEventFunc
 
 	ctl struct {
 		FrameRate time.Duration
@@ -132,15 +133,15 @@ func newProc(w, h int) *Proc {
 	proc.ctl.FrameRate = defaultFrameRate
 	proc.ctl.loop = true
 	proc.stk = newStackOps(proc.ctx.Ops)
+	proc.initCanvas(w, h)
 
 	proc.cfg.th = material.NewTheme(gofont.Collection())
-	proc.initCanvas(w, h, defaultTextFont)
 	proc.stk.cur().stroke.style.Width = 2
 
 	return proc
 }
 
-func (p *Proc) initCanvas(w, h int, fnt text.Font) {
+func (p *Proc) initCanvas(w, h int) {
 	p.initCanvasDim(w, h, 0, float64(w), 0, float64(h))
 	p.stk.cur().bkg = defaultBkgColor
 	p.stk.cur().fill = defaultFillColor
@@ -149,7 +150,6 @@ func (p *Proc) initCanvas(w, h int, fnt text.Font) {
 	p.stk.cur().text.color = defaultTextColor
 	p.stk.cur().text.align = text.Start
 	p.stk.cur().text.size = defaultTextSize
-	p.stk.cur().text.font = fnt
 }
 
 func (p *Proc) initCanvasDim(w, h int, xmin, xmax, ymin, ymax float64) {
@@ -200,6 +200,58 @@ func (p *Proc) Run() {
 	app.Main()
 }
 
+func (p *Proc) onKeyPressed(e key.Event) {
+
+	// Pressed key should not be longer in release (removal) stash
+	delete(Keyboard.keyReleaseStash, e.Name)
+
+	// Prevent multiple keypress firings
+	if _, ok := Keyboard.downKeys[e.Name]; ok {
+		return
+	}
+
+	Keyboard.KeyIsPressed = true
+	Keyboard.Key = e.Name
+	Keyboard.downKeys[e.Name] = struct{}{}
+
+	p.KeyPressed(e)
+
+	// If pressed key is not a printable ASCII character, then we
+	// should stop here. Otherwise we consider key as *typed*.
+	if !(len(e.Name) == 1 && ' ' <= e.Name[0] && e.Name[0] <= '~') {
+		return
+	}
+
+	// Prevent multiple keytyped firings
+	if Keyboard.lastKeyTyped == e.Name {
+		return
+	}
+
+	Keyboard.lastKeyTyped = e.Name
+	Keyboard.Key = e.Name
+
+	p.KeyTyped(e)
+}
+
+func (p *Proc) onKeyVirtuallyReleased(e key.Event) {
+	// Add key to removal stash
+	Keyboard.keyReleaseStash[e.Name] = e
+}
+
+func (p *Proc) onKeyReleased(e key.Event) {
+	delete(Keyboard.downKeys, e.Name)
+
+	if len(Keyboard.downKeys) == 0 {
+		Keyboard.KeyIsPressed = false
+	}
+
+	Keyboard.lastKeyTyped = ""
+
+	Keyboard.Key = e.Name
+
+	p.KeyReleased(e)
+}
+
 func (p *Proc) run() error {
 	p.setupUserFuncs()
 
@@ -234,6 +286,9 @@ func (p *Proc) run() error {
 
 	var cnt int
 
+	Keyboard.downKeys = make(map[string]struct{})
+	Keyboard.keyReleaseStash = make(map[string]key.Event)
+
 	for {
 		e := <-w.Events()
 		switch e := e.(type) {
@@ -241,6 +296,15 @@ func (p *Proc) run() error {
 			return e.Err
 
 		case key.Event:
+			if e.State == key.Press {
+				p.onKeyPressed(e)
+			} else if e.State == key.Release {
+				// We must ensure that if this is truly the end of the keypress,
+				// we get another frame to remove the record of this key's press.
+				p.onKeyVirtuallyReleased(e)
+				w.Invalidate()
+			}
+
 			switch e.Name {
 			case key.NameEscape:
 				w.Close()
@@ -267,6 +331,13 @@ func (p *Proc) run() error {
 			Event.Mouse.Buttons = Buttons(e.Buttons)
 
 		case system.FrameEvent:
+
+			// When frame appears we can deal with released keys
+			for keyName, e := range Keyboard.keyReleaseStash {
+				p.onKeyReleased(e)
+				delete(Keyboard.keyReleaseStash, keyName)
+			}
+
 			// The first frame should always been drawn, even if looping is disabled
 			if p.IsLooping() || p.FrameCount() == 0 {
 				p.draw(e)
@@ -284,6 +355,15 @@ func (p *Proc) setupUserFuncs() {
 	}
 	if p.Mouse == nil {
 		p.Mouse = func() {}
+	}
+	if p.KeyPressed == nil {
+		p.KeyPressed = func(key.Event) {}
+	}
+	if p.KeyTyped == nil {
+		p.KeyTyped = func(key.Event) {}
+	}
+	if p.KeyReleased == nil {
+		p.KeyReleased = func(key.Event) {}
 	}
 }
 
@@ -352,18 +432,9 @@ func (p *Proc) Fill(c color.Color) {
 	p.stk.cur().fill = c
 }
 
-// LoadFonts sets the fonts collection to use for text.
-func (p *Proc) LoadFonts(fnt []text.FontFace) {
-	p.cfg.th = material.NewTheme(fnt)
-}
-
 // TextSize sets the text size.
 func (p *Proc) TextSize(size float64) {
 	p.stk.cur().text.size = float32(size)
-}
-
-func (p *Proc) TextFont(fnt text.Font) {
-	p.stk.cur().text.font = fnt
 }
 
 // Text draws txt on the screen at (x,y).
@@ -391,7 +462,6 @@ func (p *Proc) Text(txt string, x, y float64) {
 	l := material.Label(p.cfg.th, unit.Px(size), txt)
 	l.Color = rgba(p.stk.cur().text.color)
 	l.Alignment = p.stk.cur().text.align
-	l.Font = p.stk.cur().text.font
 	l.Layout(p.ctx)
 }
 
@@ -532,3 +602,4 @@ func (p *Proc) DrawImage(img image.Image, x, y float64) {
 	paint.NewImageOp(img).Add(p.stk.ops)
 	paint.PaintOp{}.Add(p.stk.ops)
 }
+

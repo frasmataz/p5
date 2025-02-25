@@ -8,8 +8,6 @@ import (
 	"image"
 	"image/color"
 	"log"
-
-	"gioui.org/text"
 )
 
 // Push saves the current drawing style settings and transformations.
@@ -54,19 +52,9 @@ func Fill(c color.Color) {
 	gproc.Fill(c)
 }
 
-// LoadFonts sets the fonts collection to use for text.
-func LoadFonts(fnt []text.FontFace) {
-	gproc.LoadFonts(fnt)
-}
-
 // TextSize sets the text size.
 func TextSize(size float64) {
 	gproc.TextSize(size)
-}
-
-// TextFont sets the text font.
-func TextFont(fnt text.Font) {
-	gproc.TextFont(fnt)
 }
 
 // Text draws txt on the screen at (x,y).
@@ -156,4 +144,9 @@ func ReadImage(fname string) (image.Image, error) {
 // DrawImage draws the provided image at (x,y).
 func DrawImage(img image.Image, x, y float64) {
 	gproc.DrawImage(img, x, y)
+}
+
+// KeyIsDown checks if given key is already pressed.
+func KeyIsDown(code string) bool {
+	return gproc.KeyIsDown(code)
 }
